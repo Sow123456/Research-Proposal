@@ -50,7 +50,8 @@ with st.sidebar:
     st.caption("Official Resource Gateway & AI Proposal Drafter")
 
 # --- HYPER-SENSITIVE AGENCY DATABASE ---
-# (Rest of AGENCY_DATA follows...)
+# Expanded tags to catch niche topics like EEG, Signal Processing, AI classification
+AGENCY_DATA = {
     "ICMR (Medical & Health)": {
         "portal": "https://epms.icmr.org.in/",
         "guidelines": "https://icmr.gov.in/information-rules-manuals",
