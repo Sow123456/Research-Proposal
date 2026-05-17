@@ -1,6 +1,8 @@
 import streamlit as st
 import os
 import io
+import json
+import google.generativeai as genai
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 
@@ -19,12 +21,36 @@ st.markdown("""
     .secondary-link { display: inline-block; padding: 8px 15px; background-color: #f1f5f9; color: #1e293b !important; text-decoration: none; border-radius: 6px; font-weight: 500; margin-top: 10px; margin-left: 10px; border: 1px solid #cbd5e1; }
     .agency-header { color: #1e3a8a; border-bottom: 2px solid #2563eb; padding-bottom: 5px; margin-bottom: 15px; }
     .tag { padding: 4px 8px; border-radius: 4px; background: #f0fdf4; color: #166534; font-size: 11px; font-weight: bold; margin-right: 5px; margin-bottom: 5px; display: inline-block; border: 1px solid #dcfce7; }
+    .draft-box { padding: 25px; background: #fff; border-left: 5px solid #2563eb; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     </style>
     """, unsafe_allow_html=True)
 
+# --- SIDEBAR ---
+with st.sidebar:
+    st.title("⚙️ Hub Settings")
+    
+    # Priority 1: Check for Shared/Master Key
+    shared_key = ""
+    try:
+        shared_key = st.secrets.get("gemini_key") or \
+                     os.environ.get("GEMINI_API_KEY") or \
+                     st.secrets.get("general", {}).get("gemini_key", "")
+    except:
+        pass
+    
+    if shared_key:
+        st.success("✨ Global Suite Key Active")
+        gemini_key = shared_key
+    else:
+        st.warning("⚠️ No shared key found.")
+        gemini_key = st.text_input("Enter Gemini API Key", type="password")
+
+    st.markdown("---")
+    st.info("ProGen v4.5: Ministry Edition")
+    st.caption("Official Resource Gateway & AI Proposal Drafter")
+
 # --- HYPER-SENSITIVE AGENCY DATABASE ---
-# Expanded tags to catch niche topics like EEG, Signal Processing, AI classification
-AGENCY_DATA = {
+# (Rest of AGENCY_DATA follows...)
     "ICMR (Medical & Health)": {
         "portal": "https://epms.icmr.org.in/",
         "guidelines": "https://icmr.gov.in/information-rules-manuals",
@@ -108,6 +134,36 @@ AGENCY_DATA = {
         "guidelines": "https://icssr.org/research-projects",
         "focus": "Social, economic, and policy research.",
         "tags": ["social", "psychology", "economics", "humanities", "policy"]
+    },
+    "MoE / AICTE (Education)": {
+        "portal": "https://www.aicte-india.org/schemes/research-innovations-development-schemes",
+        "guidelines": "https://www.education.gov.in/en/schemes-and-programmes",
+        "focus": "Educational technology, pedagogy, and faculty research.",
+        "tags": ["education", "teaching", "pedagogy", "aicte", "innovation", "college"]
+    },
+    "MoES (Earth Sciences)": {
+        "portal": "https://moes.gov.in/schemes/extramural-research-schemes",
+        "guidelines": "https://moes.gov.in/schemes",
+        "focus": "Oceanography, seismology, and atmospheric science.",
+        "tags": ["earth", "ocean", "weather", "seismic", "geology", "environment"]
+    },
+    "MoEFCC (Environment & Forest)": {
+        "portal": "https://moef.gov.in/en/division/environment-divisions/environmental-education-awareness-and-training-eeat/environmental-research-scheme-ers/",
+        "guidelines": "https://moef.gov.in/en/resource/guidelines/",
+        "focus": "Climate change, biodiversity, and forestry.",
+        "tags": ["environment", "climate", "forest", "wildlife", "pollution", "ecology"]
+    },
+    "MoHUA (Urban Affairs)": {
+        "portal": "https://mohua.gov.in/cms/research-and-training.php",
+        "guidelines": "https://mohua.gov.in/schemes-and-programs.php",
+        "focus": "Smart cities, urban planning, and sanitation.",
+        "tags": ["urban", "city", "smart city", "planning", "sanitation", "infrastructure"]
+    },
+    "Ministry of Culture": {
+        "portal": "https://www.indiaculture.nic.in/fellowship-schemes",
+        "guidelines": "https://www.indiaculture.nic.in/grants",
+        "focus": "Heritage conservation and cultural research.",
+        "tags": ["culture", "history", "heritage", "archaeology", "arts"]
     }
 }
 
@@ -135,6 +191,61 @@ def create_portal_report(idea, selected_agencies):
         pdf.multi_cell(0, 7, f"Portal: {data.get('portal')}\nOfficial Guidelines: {data.get('guidelines')}\nFocus: {data.get('focus')}")
         pdf.ln(5)
     return bytes(pdf.output())
+
+def create_proposal_pdf(idea, agency, proposal_text):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_fill_color(30, 58, 138)
+    pdf.rect(0, 0, 210, 30, 'F')
+    pdf.set_font('Helvetica', 'B', 14)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_y(10)
+    pdf.cell(0, 10, f'PROPOSAL: {agency}', align='C')
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_y(40)
+    pdf.set_font('Helvetica', 'B', 11)
+    pdf.cell(0, 10, f"Technical Concept: {idea[:80]}", ln=True)
+    pdf.set_font('Helvetica', '', 10)
+    pdf.ln(5)
+    
+    def safe_text(text):
+        mapping = {'\u2022': '-', '\u2013': '-', '\u2014': '-', '\u201c': '"', '\u201d': '"', '\u2018': "'", '\u2019': "'"}
+        for k, v in mapping.items(): text = text.replace(k, v)
+        return text.encode('latin-1', 'ignore').decode('latin-1')
+        
+    pdf.multi_cell(0, 7, safe_text(proposal_text))
+    return bytes(pdf.output())
+
+# --- AI LOGIC ---
+def generate_proposal(api_key, idea, agency):
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = f"""
+        You are a Professional Research Grant Consultant. 
+        Draft a formal research proposal for the {agency} regarding the following idea.
+        
+        Research Idea: {idea}
+        Target Agency: {agency}
+        Agency Focus: {AGENCY_DATA.get(agency, {{}}).get('focus', 'General research')}
+        
+        Format the proposal with these sections:
+        1. PROJECT TITLE (Catchy and technical)
+        2. EXECUTIVE SUMMARY
+        3. OBJECTIVES (4 clear bullet points)
+        4. TECHNICAL GAP & NOVELTY
+        5. METHODOLOGY (High-level phases)
+        6. EXPECTED OUTCOMES & IMPACT
+        7. TARGET BENEFICIARIES
+        8. BUDGET ESTIMATE (Logical breakdown)
+        
+        Tone: Highly formal, technical, and academic. Ensure it aligns with the agency's specific focus.
+        """
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Drafting failed: {e}"
 
 # --- UI MAIN ---
 st.title("🏦 ProGen: Hyper-Sensitive Grant Discovery")
@@ -170,7 +281,7 @@ if st.button("🚀 Deep Scan (High Sensitivity)"):
         results.append("DST (Tech Development)")
         
         st.session_state.matched_portals = list(set(results))
-        st.success(f"🎯 High-Sensitivity Scan Complete: Found {len(st.session_state.portals if 'portals' in st.session_state else st.session_state.matched_portals)} portals!")
+        st.success(f"🎯 High-Sensitivity Scan Complete: Found {len(st.session_state.matched_portals)} potentially relevant portals!")
 
 if "matched_portals" in st.session_state:
     st.subheader("🏦 All Potentially Relevant Portals")
@@ -194,3 +305,34 @@ if "matched_portals" in st.session_state:
     if st.button("📕 Export All Matches (PDF)"):
         pdf_bytes = create_portal_report(idea_input, st.session_state.matched_portals)
         st.download_button("💾 Download Directory", data=pdf_bytes, file_name="Grant_Discovery_Report.pdf", mime="application/pdf")
+
+# --- PROPOSAL DRAFTING UI ---
+if "matched_portals" in st.session_state and len(st.session_state.matched_portals) > 0:
+    st.markdown("---")
+    st.subheader("🚀 Draft Official Ministry Proposal with AI")
+    st.write("Select a target agency from your matched results to generate a professionally structured proposal.")
+    
+    selected_agency = st.selectbox("Select Target Agency", options=st.session_state.matched_portals)
+    
+    if st.button("📝 Generate Full Draft Proposal"):
+        if not gemini_key:
+            st.error("Please enter your Gemini API Key in the sidebar.")
+        elif not idea_input:
+            st.error("Please enter your research idea above.")
+        else:
+            with st.spinner(f"Drafting technical proposal for {selected_agency}..."):
+                proposal_draft = generate_proposal(gemini_key, idea_input, selected_agency)
+                st.session_state.last_proposal = proposal_draft
+                st.session_state.last_agency = selected_agency
+
+    if "last_proposal" in st.session_state:
+        st.markdown(f"### 📄 Draft Proposal for {st.session_state.last_agency}")
+        st.markdown(f'<div class="draft-box">{st.session_state.last_proposal}</div>', unsafe_allow_html=True)
+        
+        prop_pdf = create_proposal_pdf(idea_input, st.session_state.last_agency, st.session_state.last_proposal)
+        st.download_button(
+            label="📕 Download Official Draft (PDF)",
+            data=prop_pdf,
+            file_name=f"Proposal_{st.session_state.last_agency.replace(' ', '_')}.pdf",
+            mime="application/pdf"
+        )
